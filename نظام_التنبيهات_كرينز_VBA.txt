@@ -1,0 +1,682 @@
+================================================================================
+نظام التنبيهات - شركة المقاولات التخصصية - كرينز
+================================================================================
+
+🟥 القسم الأول: جداول قاعدة البيانات (SQL)
+================================================================================
+
+-- جدول التنبيهات
+CREATE TABLE tbl_Alerts (
+    AlertID AUTOINCREMENT PRIMARY KEY,
+    AlertType TEXT(50),
+    CraneID LONG,
+    FaultID LONG,
+    RelatedForm TEXT(50),
+    AlertMessage TEXT(255),
+    AlertDate DATETIME,
+    IsRead YESNO DEFAULT False
+);
+
+-- استعلام عرض التنبيهات
+CREATE VIEW qry_Alerts AS
+SELECT * FROM tbl_Alerts ORDER BY AlertDate DESC;
+
+================================================================================
+🟧 القسم الثاني: Module عام للتنبيهات (mod_Alerts)
+================================================================================
+
+'==============================================================================
+' وحدة التنبيهات العامة - Module: mod_Alerts
+'==============================================================================
+Option Compare Database
+Option Explicit
+
+Public Sub CreateAlert( _
+    ByVal AlertType As String, _
+    ByVal CraneID As Variant, _
+    ByVal FaultID As Variant, _
+    ByVal RelatedForm As String, _
+    ByVal AlertMessage As String)
+
+    Dim sql As String
+    Dim db As DAO.Database
+
+    Set db = CurrentDb
+
+    ' بناء استعلام الإضافة
+    sql = "INSERT INTO tbl_Alerts " & _
+          "(AlertType, CraneID, FaultID, RelatedForm, AlertMessage, AlertDate, IsRead) VALUES (" & _
+          "'" & AlertType & "', " & _
+          IIf(IsNull(CraneID), "Null", CraneID) & ", " & _
+          IIf(IsNull(FaultID), "Null", FaultID) & ", " & _
+          "'" & RelatedForm & "', " & _
+          "'" & Replace(AlertMessage, "'", "''") & "', Now(), False)"
+
+    db.Execute sql
+
+    Set db = Nothing
+
+    ' إشعار فوري
+    If DCount("*", "tbl_Alerts", "IsRead=False") > 0 Then
+        ' يمكن إضافة صوت تنبيه هنا
+    End If
+End Sub
+
+'==============================================================================
+' دالة تحديث حالة التنبيهات
+'==============================================================================
+
+Public Sub MarkAlertAsRead(ByVal AlertID As Long)
+    Dim sql As String
+    sql = "UPDATE tbl_Alerts SET IsRead = True WHERE AlertID = " & AlertID
+    CurrentDb.Execute sql
+End Sub
+
+'==============================================================================
+' دالة جلب عدد التنبيهات غير المقروءة
+'==============================================================================
+
+Public Function GetUnreadAlertsCount() As Long
+    GetUnreadAlertsCount = DCount("*", "tbl_Alerts", "IsRead=False")
+End Function
+
+'==============================================================================
+' دالة جلب آخر تنبيه
+'==============================================================================
+
+Public Function GetLastAlertMessage() As String
+    Dim rs As DAO.Recordset
+    Set rs = CurrentDb.OpenRecordset("SELECT TOP 1 AlertMessage FROM tbl_Alerts WHERE IsRead=False ORDER BY AlertDate DESC")
+
+    If Not rs.EOF Then
+        GetLastAlertMessage = rs!AlertMessage
+    Else
+        GetLastAlertMessage = ""
+    End If
+
+    rs.Close
+    Set rs = Nothing
+End Function
+
+================================================================================
+🟨 القسم الثالث: فورم Alert Center (frm_AlertCenter)
+================================================================================
+
+'==============================================================================
+' كود فورم مركز التنبيهات
+'******************************************************************************
+' خصائص الفورم المطلوبة:
+' - Default View: Continuous Forms
+' - Record Source: tbl_Alerts
+' - Order By: AlertDate DESC
+'******************************************************************************
+
+Private Sub Form_Load()
+    ' تفعيل التحديث التلقائي كل 5 دقائق
+    Me.TimerInterval = 300000
+    Call LoadAlerts
+End Sub
+
+Private Sub Form_Current()
+    ' تلوين التنبيهات غير المقروءة
+    If Me.IsRead = False Then
+        Me.Detail.BackColor = RGB(255, 220, 220) ' أحمر فاتح
+        Me.txtAlertMessage.FontBold = True
+    Else
+        Me.Detail.BackColor = RGB(255, 255, 255) ' أبيض
+        Me.txtAlertMessage.FontBold = False
+    End If
+End Sub
+
+Private Sub Form_Timer()
+    ' تحديث تلقائي
+    Call LoadAlerts
+End Sub
+
+'==============================================================================
+' زر تحديث التنبيهات
+'==============================================================================
+
+Private Sub btnRefresh_Click()
+    Call LoadAlerts
+End Sub
+
+Private Sub LoadAlerts()
+    Me.Requery
+    Me.Filter = ""
+    Me.FilterOn = False
+End Sub
+
+'==============================================================================
+' زر وضع تنبيه كمقروء
+'==============================================================================
+
+Private Sub btnMarkRead_Click()
+    If Not IsNull(Me.AlertID) Then
+        Call MarkAlertAsRead(Me.AlertID)
+        Me.Requery
+        MsgBox "تم تعليم التنبيه كمقروء", vbInformation
+    End If
+End Sub
+
+'==============================================================================
+' زر وضع جميع التنبيهات كمقروءة
+'==============================================================================
+
+Private Sub btnMarkAllRead_Click()
+    Dim intCount As Integer
+
+    intCount = DCount("*", "tbl_Alerts", "IsRead=False")
+
+    If intCount > 0 Then
+        CurrentDb.Execute "UPDATE tbl_Alerts SET IsRead = True WHERE IsRead = False"
+        Me.Requery
+        MsgBox "تم وضع " & intCount & " تنبيه كمقروء", vbInformation
+    Else
+        MsgBox "لا توجد تنبيهات غير مقروءة", vbInformation
+    End If
+End Sub
+
+'==============================================================================
+' زر فتح النموذج المرتبط
+'==============================================================================
+
+Private Sub btnOpenRelated_Click()
+    If Not IsNull(Me.RelatedForm) And Not IsNull(Me.CraneID) Then
+        DoCmd.OpenForm Me.RelatedForm, , , "CraneID=" & Me.CraneID
+    ElseIf Not IsNull(Me.RelatedForm) Then
+        DoCmd.OpenForm Me.RelatedForm
+    End If
+End Sub
+
+'==============================================================================
+' عرض تفاصيل التنبيه عند النقر
+'==============================================================================
+
+Private Sub Detail_Click()
+    Dim strDetails As String
+
+    strDetails = "📋 نوع التنبيه: " & Nz(Me.AlertType, "-") & vbCrLf & _
+                 "📅 التاريخ: " & Format(Me.AlertDate, "yyyy/mm/dd hh:nn") & vbCrLf & _
+                 "📝 الرسالة: " & Me.AlertMessage & vbCrLf
+
+    If Not IsNull(Me.CraneID) Then
+        strDetails = strDetails & "🚜 رقم الرافعة: " & Me.CraneID
+    End If
+
+    MsgBox strDetails, vbInformation, "تفاصيل التنبيه"
+End Sub
+
+'==============================================================================
+' حذف التنبيه
+'==============================================================================
+
+Private Sub btnDeleteAlert_Click()
+    If MsgBox("هل تريد حذف هذا التنبيه؟", vbYesNo + vbQuestion) = vbYes Then
+        DoCmd.RunCommand acCmdDeleteRecord
+        MsgBox "تم حذف التنبيه", vbInformation
+    End If
+End Sub
+
+'==============================================================================
+' البحث في التنبيهات
+'==============================================================================
+
+Private Sub txtSearch_Change()
+    If Len(Me.txtSearch.Text) > 0 Then
+        Me.Filter = "AlertMessage LIKE '*" & Me.txtSearch.Text & "*'"
+        Me.FilterOn = True
+    Else
+        Me.FilterOn = False
+    End If
+End Sub
+
+'==============================================================================
+' فلترة حسب الحالة
+'==============================================================================
+
+Private Sub cmbFilter_AfterUpdate()
+    Select Case Me.cmbFilter.Value
+        Case 1 ' الكل
+            Me.FilterOn = False
+        Case 2 ' غير مقروء
+            Me.Filter = "IsRead=False"
+            Me.FilterOn = True
+        Case 3 ' مقروء
+            Me.Filter = "IsRead=True"
+            Me.FilterOn = True
+    End Select
+End Sub
+
+================================================================================
+🟩 القسم الرابع: فورم الداشبورد (frm_Dashboard)
+================================================================================
+
+'==============================================================================
+' زر فتح مركز التنبيهات
+'******************************************************************************
+
+Private Sub btnAlerts_Click()
+    DoCmd.OpenForm "frm_AlertCenter"
+End Sub
+
+'==============================================================================
+' إشعار عند فتح الداشبورد
+'******************************************************************************
+
+Private Sub Form_Load()
+    Dim intUnread As Integer
+
+    intUnread = GetUnreadAlertsCount()
+
+    If intUnread > 0 Then
+        ' تغيير لون زر التنبيهات
+        Me.btnAlerts.BackColor = RGB(255, 0, 0) ' أحمر
+
+        ' إظهار العدد
+        Me.txtAlertCount.Visible = True
+        Me.txtAlertCount = intUnread
+
+        MsgBox "🔔 يوجد " & intUnread & " تنبيه جديد لم تراجعها", vbExclamation, "تنبيهات الأعطال"
+    Else
+        Me.btnAlerts.BackColor = RGB(0, 128, 0) ' أخضر
+        Me.txtAlertCount.Visible = False
+    End If
+
+    ' تحميل باقي بيانات الداشبورد
+    Call LoadDashboardData
+End Sub
+
+'==============================================================================
+' تحديث بيانات الداشبورد
+'******************************************************************************
+
+Private Sub btnRefresh_Click()
+    Call LoadDashboardData
+    MsgBox "تم تحديث بيانات الداشبورد", vbInformation
+End Sub
+
+Private Sub LoadDashboardData()
+    ' تحديث عدادات الرافعات
+    Me.txtActiveCranes = DCount("*", "tbl_Cranes", "Status='عاملة'")
+    Me.txtIdleCranes = DCount("*", "tbl_Cranes", "Status='متاحة'")
+    Me.txtMaintenanceCranes = DCount("*", "tbl_Cranes", "Status='صيانة'")
+
+    ' تحديث عدادات العملاء والمشاريع
+    Me.txtTotalCustomers = DCount("*", "tbl_Customers")
+    Me.txtActiveProjects = DCount("*", "tbl_Projects", "Status='قائم'")
+    Me.txtCompletedProjects = DCount("*", "tbl_Projects", "Status='مكتمل'")
+
+    ' تحديث عدادات التنبيهات
+    Me.txtAlertCount = GetUnreadAlertsCount()
+
+    ' تحديث تنبيهات المخزون
+    Me.txtLowStock = DCount("*", "qry_LowStockAlert")
+
+    Me.Requery
+End Sub
+
+================================================================================
+🟪 القسم الخامس: فورم الأعطال (frm_CraneFaults)
+================================================================================
+
+'==============================================================================
+' زر حفظ العطل وإنشاء تنبيه
+'******************************************************************************
+
+Private Sub btnSaveFault_Click()
+    ' التحقق من البيانات
+    If IsNull(Me.cmbCraneID) Then
+        MsgBox "الرجاء اختيار الرافعة", vbExclamation
+        Me.cmbCraneID.SetFocus
+        Exit Sub
+    End If
+
+    If IsNull(Me.txtFaultDescription) Then
+        MsgBox "الرجاء إدخال وصف العطل", vbExclamation
+        Me.txtFaultDescription.SetFocus
+        Exit Sub
+    End If
+
+    ' حفظ السجل
+    If Me.Dirty Then
+        Me.Dirty = False
+    End If
+
+    ' إنشاء تنبيه
+    Call CreateAlert( _
+        "عطل", _
+        Me.cmbCraneID, _
+        Me.FaultID, _
+        "frm_CraneFaults", _
+        "🚨 عطل جديد في الرافعة رقم " & Me.cmbCraneID & vbCrLf & _
+        "الوصف: " & Me.txtFaultDescription)
+
+    MsgBox "✅ تم حفظ العطل وإرسال التنبيه", vbInformation
+
+    ' تحديث الداشبورد
+    If CurrentProject.AllForms("frm_Dashboard").IsLoaded Then
+        DoCmd.Close acForm, "frm_Dashboard", acSaveNo
+        DoCmd.OpenForm "frm_Dashboard"
+    End If
+End Sub
+
+'==============================================================================
+' زر إغلاق العطل
+'****************************************************************************==
+
+Private Sub btnCloseFault_Click()
+    If Not IsNull(Me.FaultID) Then
+        If MsgBox("هل تريد إغلاق هذا العطل؟", vbYesNo + vbQuestion) = vbYes Then
+            Me.Status = "مغلق"
+            Me.Dirty = False
+
+            ' إنشاء تنبيه إغلاق
+            Call CreateAlert( _
+                "إغلاق عطل", _
+                Me.cmbCraneID, _
+                Me.FaultID, _
+                "frm_CraneFaults", _
+                "✅ تم إغلاق عطل الرافعة رقم " & Me.cmbCraneID)
+
+            MsgBox "تم إغلاق العطل", vbInformation
+        End If
+    End If
+End Sub
+
+'==============================================================================
+' تحديث حالة الرافعة عند تسجيل عطل
+'****************************************************************************==
+
+Private Sub cmbCraneID_AfterUpdate()
+    If Not IsNull(Me.cmbCraneID) Then
+        ' تحديث حالة الرافعة تلقائياً
+        CurrentDb.Execute "UPDATE tbl_Cranes SET Status='صيانة' WHERE CraneID=" & Me.cmbCraneID
+    End If
+End Sub
+
+================================================================================
+🟫 القسم السادس: فورم الصيانة (frm_CraneMaintenance)
+================================================================================
+
+'==============================================================================
+' حفظ بيانات الصيانة
+'******************************************************************************
+
+Private Sub btnSaveMaintenance_Click()
+    If IsNull(Me.cmbCraneID) Then
+        MsgBox "الرجاء اختيار الرافعة", vbExclamation
+        Exit Sub
+    End If
+
+    Me.Dirty = False
+
+    ' إنشاء تنبيه إكمال الصيانة
+    Call CreateAlert( _
+        "صيانة", _
+        Me.cmbCraneID, _
+        Me.MaintenanceID, _
+        "frm_CraneMaintenance", _
+        "🔧 تم إكمال صيانة الرافعة رقم " & Me.cmbCraneID)
+
+    ' تحديث حالة الرافعة
+    CurrentDb.Execute "UPDATE tbl_Cranes SET Status='عاملة' WHERE CraneID=" & Me.cmbCraneID
+
+    MsgBox "تم حفظ بيانات الصيانة", vbInformation
+End Sub
+
+================================================================================
+🟬 القسم السابع: فورم الصرف (frm_StoreOut)
+================================================================================
+
+'==============================================================================
+' منع الصرف عند عدم كفاية الرصيد + تنبيه
+'******************************************************************************
+
+Private Sub Form_BeforeUpdate(Cancel As Integer)
+    Dim AvailableQty As Double
+    Dim RequestedQty As Double
+
+    RequestedQty = Me.txtQuantity
+
+    ' حساب الرصيد المتاح
+    AvailableQty = GetAvailableBalance(Me.cmbItemID, Me.cmbStoreID)
+
+    If RequestedQty > AvailableQty Then
+        MsgBox _
+        "❌ لا يمكن الصرف!" & vbCrLf & _
+        "الكمية المطلوبة: " & RequestedQty & vbCrLf & _
+        "الرصيد المتاح: " & AvailableQty, vbCritical, "خطأ في الصرف"
+
+        Cancel = True
+        Exit Sub
+    End If
+End Sub
+
+'==============================================================================
+' بعد حفظ الصرف - إضافة تلقائية لمخزن المخلفات
+'****************************************************************************==
+
+Private Sub Form_AfterInsert()
+    Const STORE_SPAREPARTS As Long = 1  ' مخزن قطع الغيار
+    Const STORE_SCRAP As Long = 5        ' مخزن المخلفات
+
+    ' إذا كان الصرف من مخزن قطع الغيار
+    If Me.cmbStoreID = STORE_SPAREPARTS Then
+        ' إضافة تلقائية للمخلفات
+        Call CreateAlert( _
+            "تحويل مخلفات", _
+            Null, _
+            Null, _
+            "frm_StoreOut", _
+            "♻️ تم تحويل " & Me.txtQuantity & " منقطع غيار إلى مخزن المخلفات")
+    End If
+
+    ' إذا كانت الكمية قرب حد النقص
+    Dim AvailableQty As Double
+    AvailableQty = GetAvailableBalance(Me.cmbItemID, Me.cmbStoreID)
+
+    If AvailableQty <= GetReorderLevel(Me.cmbItemID) Then
+        Call CreateAlert( _
+            "نقص مخزون", _
+            Null, _
+            Null, _
+            "frm_Items", _
+            "⚠️ الصنف [" & Me.cmbItemID & "] وصل لحد النقص! الرصيد: " & AvailableQty)
+    End If
+End Sub
+
+'==============================================================================
+' دوال مساعدة للصرف
+'==============================================================================
+
+Private Function GetAvailableBalance(ItemID As Long, StoreID As Long) As Double
+    Dim OpeningBal As Double
+    Dim TotalIn As Double
+    Dim TotalOut As Double
+
+    OpeningBal = Nz(DSum("OpeningBalance", "tbl_ItemOpeningBalance", _
+        "ItemID=" & ItemID & " AND StoreID=" & StoreID), 0)
+
+    TotalIn = Nz(DSum("Quantity", "tbl_StoreIn", _
+        "ItemID=" & ItemID & " AND StoreID=" & StoreID), 0)
+
+    TotalOut = Nz(DSum("Quantity", "tbl_StoreOut", _
+        "ItemID=" & ItemID & " AND StoreID=" & StoreID), 0)
+
+    GetAvailableBalance = OpeningBal + TotalIn - TotalOut
+End Function
+
+Private Function GetReorderLevel(ItemID As Long) As Double
+    GetReorderLevel = Nz(DLookup("ReorderLevel", "tbl_Items", "ItemID=" & ItemID), 0)
+End Function
+
+================================================================================
+🟭 القسم الثامن: فورم تسجيل الدخول (frm_Login)
+================================================================================
+
+'==============================================================================
+' تسجيل الدخول
+'******************************************************************************
+
+Private Sub btnLogin_Click()
+    Dim rs As DAO.Recordset
+    Dim strUser As String
+    Dim strPass As String
+
+    strUser = Nz(Me.txtUserName, "")
+    strPass = Nz(Me.txtPassword, "")
+
+    If strUser = "" Or strPass = "" Then
+        MsgBox "الرجاء إدخال اسم المستخدم وكلمة المرور", vbExclamation
+        Exit Sub
+    End If
+
+    ' البحث عن المستخدم
+    Set rs = CurrentDb.OpenRecordset( _
+        "SELECT * FROM tbl_Users WHERE UserName='" & strUser & "' AND Password='" & strPass & "'")
+
+    If rs.EOF Then
+        MsgBox "اسم المستخدم أو كلمة المرور غير صحيحة", vbExclamation
+        Me.txtPassword = ""
+        Me.txtPassword.SetFocus
+        rs.Close
+        Set rs = Nothing
+        Exit Sub
+    End If
+
+    ' التحقق من حالة الحساب
+    If rs!IsActive = False Then
+        MsgBox "هذا الحساب موقوف", vbCritical
+        rs.Close
+        Set rs = Nothing
+        Exit Sub
+    End If
+
+    ' حفظ بيانات المستخدم الحالي
+    g_CurrentUserID = rs!UserID
+    g_CurrentUserName = rs!UserName
+    g_CurrentUserRole = rs!Role
+
+    rs.Close
+    Set rs = Nothing
+
+    ' فتح الداشبورد
+    DoCmd.Close acForm, Me.Name
+    DoCmd.OpenForm "frm_Dashboard"
+End Sub
+
+'==============================================================================
+' تسجيل الخروج
+'****************************************************************************==
+
+Private Sub btnLogout_Click()
+    If MsgBox("هل تريد تسجيل الخروج؟", vbYesNo + vbQuestion) = vbYes Then
+        g_CurrentUserID = 0
+        g_CurrentUserName = ""
+        g_CurrentUserRole = ""
+
+        DoCmd.Close acForm, Me.Name
+        DoCmd.OpenForm "frm_Login"
+    End If
+End Sub
+
+================================================================================
+🟮 القسم التاسع: متغيرات عامة (Module: mod_Global)
+================================================================================
+
+'==============================================================================
+' المتغيرات العامة
+'==============================================================================
+
+Public g_CurrentUserID As Long
+Public g_CurrentUserName As String
+Public g_CurrentUserRole As String
+
+'==============================================================================
+' دالة التحقق من الصلاحيات
+'==============================================================================
+
+Public Function HasPermission(PermissionName As String) As Boolean
+    Dim rs As DAO.Recordset
+
+    Set rs = CurrentDb.OpenRecordset( _
+        "SELECT * FROM tbl_UserPermissions UP " & _
+        "INNER JOIN tbl_Permissions P ON UP.PermissionID = P.PermissionID " & _
+        "WHERE UP.UserID=" & g_CurrentUserID & " AND P.PermissionName='" & PermissionName & "'")
+
+    HasPermission = Not rs.EOF
+
+    rs.Close
+    Set rs = Nothing
+End Function
+
+'==============================================================================
+' دالة التحقق من الدور
+'******************************************************************************
+
+Public Function IsAdmin() As Boolean
+    IsAdmin = (g_CurrentUserRole = "Admin")
+End Function
+
+Public Function IsStoreManager() As Boolean
+    IsStoreManager = (g_CurrentUserRole = "Store")
+End Function
+
+Public Function IsMaintenance() As Boolean
+    IsMaintenance = (g_CurrentUserRole = "Maintenance")
+End Function
+
+Public Function IsOperator() As Boolean
+    IsOperator = (g_CurrentUserRole = "Operation")
+End Function
+
+================================================================================
+🟯 القسم العاشر: كيفية الاستخدام
+================================================================================
+
+'==============================================================================
+' خطوات التفعيل في Access
+'==============================================================================
+
+' 1. إنشاء الجداول المطلوبة
+'    - انسخ أوامر SQL في القسم الأول ونفذها
+
+' 2. إنشاء Module جديد
+'    - أنشئ Module جديد باسم mod_Alerts
+'    - انسخ أكواد القسم الثاني
+
+' 3. إنشاء متغيرات عامة
+'    - أنشئ Module جديد باسم mod_Global
+'    - انسخ أكواد القسم التاسع
+
+' 4. إنشاء فورم Alert Center
+'    - أنشئ فورم جديد Continuous Forms
+'    - أضف الحقول المطلوبة
+'    - انسخ أكواد القسم الثالث
+
+' 5. ربط الداشبورد
+'    - أضف زر فتح التنبيهات
+'    - انسخ أكواد القسم الرابع
+
+' 6. ربط فورم الأعطال
+'    - أضف كود القسم الخامس
+
+' 7. ربط فورم الصيانة
+'    - أضف كود القسم السادس
+
+' 8. ربط فورم الصرف
+'    - أضف كود القسم السابع
+
+'==============================================================================
+' ملاحظات مهمة
+'==============================================================================
+
+' - تأكد من تسمية الحقول بشكل صحيح في كل فورم
+' - عدّل أرقام المخازن (STORE_SPAREPARTS, STORE_SCRAP) حسب قاعدة البيانات
+' - يمكنك تخصيص التنبيهات لكل مستخدم بإضافة UserID في جدول tbl_Alerts
+' - لاستخدام التنبيهات مع أنظمة أخرى، يمكنك إضافة كود الإشعار في CreateAlert
+
+================================================================================
+✅ النظام جاهز للاستخدام - شركة المقاولات التخصصية - كرينز
+================================================================================
